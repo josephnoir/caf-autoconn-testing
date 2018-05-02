@@ -17,7 +17,7 @@ if cd actor-framework
 then
   git pull
 else 
-  git clone https://server/repo repo
+  git clone https://github.com/actor-framework/actor-framework.git
 fi
 cd $ROOT_DIR/actor-framework
 git checkout topic/improve-autoconnect
