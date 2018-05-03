@@ -26,13 +26,15 @@ class configuration : public actor_system_config {
 public:
   std::string host = "localhost";
   uint16_t port = 12345;
+  uint16_t local_port = 0;
   uint32_t others = 7;
   configuration() {
     load<io::middleman>();
     set("middleman.enable-tcp", true);
     set("middleman.enable-udp", false);
     opt_group{custom_options_, "global"}
-      .add(port, "port,P", "set port")
+      .add(port, "port,P", "set remote port")
+      .add(port, "local-port,L", "set local port")
       .add(host, "host,H", "set host")
       .add(others, "others,o", "set number of other nodes");
   }
@@ -95,21 +97,25 @@ behavior ping_test(stateful_actor<cache>* self, uint32_t other_nodes) {
 } // namespace anonymous
 
 void caf_main(actor_system& system, const configuration& config) {
+  auto remote_port = config.port;
+  auto local_port = config.local_port;
+  if (local_port == 0)
+    local_port = remote_port;
   std::cout << "System on node " << to_string(system.node()) << std::endl;
   scoped_actor self{system};
   auto pt = system.spawn(ping_test, config.others);
-  auto port = system.middleman().publish(pt, config.port);
+  auto port = system.middleman().publish(pt, local_port);
   if (!port) {
-    std::cerr << "Could not publish my actor on port " << config.port
+    std::cerr << "Could not publish my actor on port " << local_port
               << std::endl;
     return;
   }
   self->delayed_send(self, delay, ping_atom::value);
   self->receive([&](ping_atom) { std::cout << "Let's do this!" << std::endl; });
-  auto next = system.middleman().remote_actor(config.host, config.port);
+  auto next = system.middleman().remote_actor(config.host, remote_port);
   if (!next) {
     std::cerr << "Could not connect to next node! (" << config.host << ":"
-              << config.port << ")" << std::endl;
+              << remote_port << ")" << std::endl;
     return;
   }
   self->send(pt, *next);
