@@ -50,6 +50,7 @@ behavior ping_test(stateful_actor<cache>* self, uint32_t other_nodes) {
   self->state.sent_pings = 0;
   return {
     [=](actor next) {
+      std::cout << "[+] " << to_string(next.node()) << std::endl;
       self->state.start = system_clock::now();
       self->state.next = next;
       self->send(next, share_atom::value, self);
@@ -57,13 +58,14 @@ behavior ping_test(stateful_actor<cache>* self, uint32_t other_nodes) {
     [=](share_atom, actor an_actor) {
       auto&s = self->state;
       if (an_actor == self) {
+        std::cout << "[!] " << to_string(self->current_sender()->node()) << std::endl;
         auto dur = system_clock::now() - s.start;
         std::cout << "Got my actor back after "
                   << duration_cast<milliseconds>(dur).count()
                   << std::endl;
       } else {
-        std::cout << "Sending message to node " << to_string(an_actor.node())
-                  << std::endl;
+        std::cout << "[+] " << to_string(self->current_sender()->node()) << std::endl;
+        std::cout << "[<] " << to_string(an_actor.node()) << std::endl;
         self->send(s.next, share_atom::value, an_actor);
         self->send(an_actor, ping_atom::value);
         s.sent_pings += 1;
@@ -77,6 +79,7 @@ behavior ping_test(stateful_actor<cache>* self, uint32_t other_nodes) {
       }
     },
     [=](ping_atom) {
+      std::cout << "[>] " << to_string(self->current_sender()->node()) << std::endl;
       auto&s = self->state;
       s.received_pings += 1;
       if (s.received_pings >= other_nodes && s.sent_pings >= other_nodes) {
