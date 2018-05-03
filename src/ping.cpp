@@ -41,11 +41,13 @@ public:
 struct cache {
   actor next;
   uint32_t received_pings;
+  uint32_t sent_pings;
   system_clock::time_point start;
 };
 
-behavior ping_test(stateful_actor<cache>* self, uint32_t expected_pings) {
+behavior ping_test(stateful_actor<cache>* self, uint32_t other_nodes) {
   self->state.received_pings = 0;
+  self->state.sent_pings = 0;
   return {
     [=](actor next) {
       self->state.start = system_clock::now();
@@ -53,24 +55,33 @@ behavior ping_test(stateful_actor<cache>* self, uint32_t expected_pings) {
       self->send(next, share_atom::value, self);
     },
     [=](share_atom, actor an_actor) {
+      auto&s = self->state;
       if (an_actor == self) {
-        auto dur = system_clock::now() - self->state.start;
+        auto dur = system_clock::now() - s.start;
         std::cout << "Got my actor back after "
                   << duration_cast<milliseconds>(dur).count()
                   << std::endl;
       } else {
         std::cout << "Sending message to node " << to_string(an_actor.node())
                   << std::endl;
-        self->send(self->state.next, share_atom::value, an_actor);
+        self->send(s.next, share_atom::value, an_actor);
         self->send(an_actor, ping_atom::value);
+        s.sent_pings += 1;
+        if (s.sent_pings >= other_nodes && s.received_pings >= other_nodes) {
+          auto dur = system_clock::now() - self->state.start;
+          std::cout << "Quitting after "
+                    << duration_cast<milliseconds>(dur).count()
+                    << std::endl;
+          self->quit();
+        }
       }
     },
     [=](ping_atom) {
       auto&s = self->state;
       s.received_pings += 1;
-      if (s.received_pings >= expected_pings) {
+      if (s.received_pings >= other_nodes && s.sent_pings >= other_nodes) {
         auto dur = system_clock::now() - self->state.start;
-        std::cout << "Got all pings after "
+        std::cout << "Quitting after "
                   << duration_cast<milliseconds>(dur).count()
                   << std::endl;
         self->quit();
