@@ -58,14 +58,13 @@ behavior ping_test(stateful_actor<cache>* self, uint32_t other_nodes) {
     [=](share_atom, actor an_actor) {
       auto&s = self->state;
       if (an_actor == self) {
-        std::cout << "[!] " << to_string(self->current_sender()->node()) << std::endl;
+        std::cout << "[!] actor returned" << std::endl;
         auto dur = system_clock::now() - s.start;
         std::cout << "Got my actor back after "
                   << duration_cast<milliseconds>(dur).count()
                   << std::endl;
       } else {
-        std::cout << "[+] " << to_string(self->current_sender()->node()) << std::endl;
-        std::cout << "[<] " << to_string(an_actor.node()) << std::endl;
+        std::cout << "[+] " << to_string(an_actor.node()) << std::endl;
         self->send(s.next, share_atom::value, an_actor);
         self->send(an_actor, ping_atom::value);
         s.sent_pings += 1;
