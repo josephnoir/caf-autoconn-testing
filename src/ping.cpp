@@ -11,12 +11,13 @@ namespace {
 
 using ping_atom = caf::atom_constant<atom("ping")>;
 using share_atom = caf::atom_constant<atom("share")>;
+using shutdown_atom = caf::atom_constant<atom("shutdown")>;
 
 using std::chrono::system_clock;
 using std::chrono::milliseconds;
 using std::chrono::duration_cast;
 
-constexpr auto delay = std::chrono::seconds(1);
+constexpr auto delay = std::chrono::seconds(2);
 
 // -----------------------------------------------------------------------------
 //  ACTOR SYSTEM CONFIG
@@ -27,6 +28,7 @@ public:
   std::string host = "localhost";
   uint16_t port = 12345;
   uint16_t local_port = 0;
+  uint16_t offset = 0;
   uint32_t others = 7;
   configuration() {
     load<io::middleman>();
@@ -34,8 +36,9 @@ public:
     set("middleman.enable-udp", false);
     opt_group{custom_options_, "global"}
       .add(port, "port,P", "set remote port")
-      .add(port, "local-port,L", "set local port")
+      .add(local_port, "local-port,L", "set local port")
       .add(host, "host,H", "set host")
+      .add(offset, "offset,O", "set offset for ports (for repeated local testing)")
       .add(others, "others,o", "set number of other nodes");
   }
 };
@@ -75,7 +78,7 @@ behavior ping_test(stateful_actor<cache>* self, uint32_t other_nodes) {
           std::cout << "Quitting after "
                     << duration_cast<milliseconds>(dur).count()
                     << std::endl;
-          self->quit();
+          self->delayed_send(self, delay, shutdown_atom::value);
         }
       }
     },
@@ -88,8 +91,11 @@ behavior ping_test(stateful_actor<cache>* self, uint32_t other_nodes) {
         std::cout << "Quitting after "
                   << duration_cast<milliseconds>(dur).count()
                   << std::endl;
-        self->quit();
+        self->delayed_send(self, delay, shutdown_atom::value);
       }
+    },
+    [=](shutdown_atom) {
+      self->quit();
     }
   };
 }
@@ -97,8 +103,14 @@ behavior ping_test(stateful_actor<cache>* self, uint32_t other_nodes) {
 } // namespace anonymous
 
 void caf_main(actor_system& system, const configuration& config) {
-  auto remote_port = config.port;
-  auto local_port = config.local_port;
+  std::cout << "Config: host = " << config.host
+            << ", port = " << config.port
+            << ", local-port = " << config.local_port
+            << ", others = " << config.others
+            << ", offset = " << config.offset
+            << std::endl;
+  auto remote_port = config.port + config.offset;
+  auto local_port = config.local_port + config.offset;
   if (local_port == 0)
     local_port = remote_port;
   std::cout << "System on node " << to_string(system.node()) << std::endl;
@@ -111,13 +123,15 @@ void caf_main(actor_system& system, const configuration& config) {
     return;
   }
   self->delayed_send(self, delay, ping_atom::value);
-  self->receive([&](ping_atom) { std::cout << "Let's do this!" << std::endl; });
+  self->receive([&](ping_atom) { std::cout << "Acquiring remote actor." << std::endl; });
   auto next = system.middleman().remote_actor(config.host, remote_port);
   if (!next) {
     std::cerr << "Could not connect to next node! (" << config.host << ":"
               << remote_port << ")" << std::endl;
     return;
   }
+  self->delayed_send(self, delay, ping_atom::value);
+  self->receive([&](ping_atom) { std::cout << "Let's do this!" << std::endl; });
   self->send(pt, *next);
 }
 
