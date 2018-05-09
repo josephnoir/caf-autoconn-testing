@@ -16,12 +16,6 @@ using pong_atom = caf::atom_constant<atom("pong")>;
 using share_atom = caf::atom_constant<atom("share")>;
 using shutdown_atom = caf::atom_constant<atom("shutdown")>;
 
-using std::chrono::system_clock;
-using std::chrono::milliseconds;
-using std::chrono::duration_cast;
-
-constexpr auto delay = std::chrono::seconds(1);
-
 // -----------------------------------------------------------------------------
 //  ACTOR SYSTEM CONFIG
 // -----------------------------------------------------------------------------
@@ -33,6 +27,7 @@ public:
   uint16_t local_port = 0;
   uint16_t offset = 0;
   uint32_t others = 7;
+  uint32_t timeout = 0;
   bool leader = false;
   configuration() {
     load<io::middleman>();
@@ -44,6 +39,7 @@ public:
       .add(host, "host,H", "set host")
       .add(offset, "offset,O", "set offset for ports (for repeated local testing)")
       .add(leader, "leader,L", "make this node the leader")
+      .add(timeout, "timeout,t", "use a timeout (sec) instead of user input")
       .add(others, "others,o", "set number of other nodes");
   }
 };
@@ -112,13 +108,13 @@ behavior ping_test(stateful_actor<cache>* self, uint32_t other_nodes, bool leade
 } // namespace anonymous
 
 void caf_main(actor_system& system, const configuration& config) {
-  std::cout << "Config: host = " << config.host
-            << ", port = " << config.port
-            << ", local-port = " << config.local_port
-            << ", others = " << config.others
-            << ", offset = " << config.offset
-            << ", leader = " << std::boolalpha << config.leader
-            << std::endl;
+  std::cout << "Config: \n > host = " << config.host << std::endl
+            << " > port = " << config.port << std::endl
+            << " > local-port = " << config.local_port << std::endl
+            << " > others = " << config.others << std::endl
+            << " > offset = " << config.offset << std::endl
+            << " > leader = " << std::boolalpha << config.leader  << std::endl
+            << " > timeout = " << config.timeout << std::endl;
   auto remote_port = config.port + config.offset;
   auto local_port = config.local_port + config.offset;
   if (config.local_port == 0)
@@ -136,10 +132,21 @@ void caf_main(actor_system& system, const configuration& config) {
   }
   std::cout << "Published actor on " << *port << std::endl;
 
-  self->delayed_send(self, delay, ping_atom::value);
-  self->receive([&](ping_atom) {
+  // Wait for user input. Make sure all participants published their actor.
+  if (config.timeout > 0) {
+    std::cout << "Waiting for " << config.timeout << " seconds to give all "
+                 "nodes a chance to published their actor" << std::endl;
+    self->delayed_send(self, std::chrono::seconds(config.timeout),
+                       ping_atom::value);
+    self->receive([&](ping_atom) {
+      std::cout << std::endl << "Connecting to next node ..." << std::endl;
+    });
+  } else {
+    std::cout << "Press any key to continue ... "
+                 "(make sure all nodes published their actor)" << std::endl;
+    std::cin.get();
     std::cout << std::endl << "Connecting to next node ..." << std::endl;
-  });
+  }
   auto next = system.middleman().remote_actor(config.host, remote_port);
   if (!next) {
     std::cerr << "Could not connect to next node! (" << config.host << ":"
