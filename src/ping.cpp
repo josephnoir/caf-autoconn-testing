@@ -20,7 +20,7 @@ using std::chrono::system_clock;
 using std::chrono::milliseconds;
 using std::chrono::duration_cast;
 
-constexpr auto delay = std::chrono::seconds(2);
+constexpr auto delay = std::chrono::seconds(1);
 
 // -----------------------------------------------------------------------------
 //  ACTOR SYSTEM CONFIG
@@ -83,6 +83,7 @@ behavior ping_test(stateful_actor<cache>* self, uint32_t other_nodes, bool leade
           auto&s = self->state;
           s.received_pongs += 1;
           if (s.received_pongs >= other_nodes) {
+            std::cout << "[ö] got answers from all others" << std::endl;
             if (leader)
               self->send(s.next, done_atom::value);
             else if (s.done)
@@ -120,14 +121,14 @@ void caf_main(actor_system& system, const configuration& config) {
             << std::endl;
   auto remote_port = config.port + config.offset;
   auto local_port = config.local_port + config.offset;
-  if (local_port == 0)
+  if (config.local_port == 0)
     local_port = remote_port;
   std::cout << "Node id: " << system.node().process_id() << std::endl;
   scoped_actor self{system};
   auto pt = system.spawn(ping_test, config.others, config.leader);
 
   std::cout << std::endl << "Opening local port ... " << std::endl;
-  auto port = system.middleman().publish(pt, local_port);
+  auto port = system.middleman().publish(pt, local_port, nullptr, true);
   if (!port) {
     std::cerr << "Could not publish my actor on port " << local_port
               << std::endl;
@@ -145,12 +146,8 @@ void caf_main(actor_system& system, const configuration& config) {
               << remote_port << ")" << std::endl;
     return;
   }
-  std::cout << "Connected." << std::endl;
-
-  self->delayed_send(self, delay, ping_atom::value);
-  self->receive([&](ping_atom) {
-    std::cout << std::endl << "Starting interaction ..." << std::endl;
-  });
+  std::cout << "Connected." << std::endl << std::endl
+            << "Starting interaction ..." << std::endl;
   self->send(pt, *next);
 }
 
