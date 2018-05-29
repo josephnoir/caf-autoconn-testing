@@ -86,3 +86,13 @@ target_link_libraries(ping
   ${CAF_LIBRARY_CORE}
   ${CAF_LIBRARY_IO}
 )
+
+add_executable(pong
+  src/pong.cpp
+  ${HEADERS}
+)
+target_link_libraries(pong
+  ${CMAKE_DL_LIBS}
+  ${CAF_LIBRARY_CORE}
+  ${CAF_LIBRARY_IO}
+)
