@@ -94,6 +94,7 @@ behavior ping_test(stateful_actor<cache>* self, uint32_t other_nodes, bool leade
             self->send(s.next, done_atom::value, name);
         },
         [=](shutdown_atom, const std::string& name) {
+          std::cout << "shutdown!" << std::endl;
           if (!leader)
             self->send(self->state.next, shutdown_atom::value, name);
           self->quit();
