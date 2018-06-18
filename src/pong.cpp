@@ -10,6 +10,7 @@ using namespace caf::io;
 
 namespace {
 
+using ack_atom = caf::atom_constant<atom("ack")>;
 using tag_atom = caf::atom_constant<atom("tag")>;
 using done_atom = caf::atom_constant<atom("done")>;
 using ping_atom = caf::atom_constant<atom("ping")>;
@@ -52,7 +53,47 @@ struct cache {
   bool received_done;
   bool tagged;
   bool done;
+  std::unordered_map<actor, uint32_t> sending;
+  std::unordered_map<strong_actor_ptr, std::set<uint32_t>> receiving;
 };
+
+template <class ... Ts>
+void send_reliably(stateful_actor<cache>* self, const actor dest,
+                   Ts ... xs) {
+  auto sequence_number = self->state.sending[dest]++;
+  auto msg = make_message(std::forward<Ts>(xs)..., sequence_number);
+  self->request(dest, std::chrono::milliseconds(200), msg).then(
+    [=](ack_atom) {
+      // nop
+    },
+    [=](const error&) {
+      std::cerr << "retransmitting" << std::endl;
+      send_reliably(self, dest, msg);
+    }
+  );
+}
+
+void send_reliably(stateful_actor<cache>* self, const actor dest,
+                   const caf::message& msg) {
+  self->request(dest, std::chrono::milliseconds(200), msg).then(
+    [=](ack_atom) {
+      // nop
+    },
+    [=](const error&) {
+      std::cerr << "retransmitting" << std::endl;
+      send_reliably(self, dest, msg);
+    }
+  );
+}
+
+bool is_duplicate(stateful_actor<cache>* self, uint32_t num) {
+  auto& nums = self->state.receiving[self->current_sender()];
+  auto res = nums.count(num) > 0;
+  nums.insert(num);
+  if (res)
+    std::cerr << "Ignoring duplicate" << std::endl;
+  return res;
+}
 
 behavior ping_test(stateful_actor<cache>* self, uint32_t other_nodes, bool leader, const std::string& my_name) {
   self->state.received_pongs = 0;
@@ -64,59 +105,78 @@ behavior ping_test(stateful_actor<cache>* self, uint32_t other_nodes, bool leade
       std::cout << "[n] " << next.node().process_id() << std::endl;
       self->state.next = next;
       if (leader)
-        self->send(self, tag_atom::value);
+        send_reliably(self, self, tag_atom::value);
       self->set_default_handler(print_and_drop);
       self->become(
-        [=](tag_atom) {
-          std::cout << "[t] I'm it! " << std::endl;
-          auto& s = self->state;
-          if (s.done) {
-            self->send(s.next, done_atom::value, my_name);
-          } else if (s.tagged) {
-            for (auto a : s.others)
-              self->send(a, ping_atom::value, my_name);
-            s.done = true;
-          } else {
-            self->send(s.next, share_atom::value, self, my_name);
-            s.tagged = true;
+        [=](tag_atom, uint32_t num) {
+          if (self->current_sender() == self || !is_duplicate(self, num)) {
+            std::cout << "[t] I'm it! " << std::endl;
+            auto& s = self->state;
+            if (s.done) {
+              send_reliably(self, s.next, done_atom::value, my_name);
+            } else if (s.tagged) {
+              for (auto a : s.others)
+                send_reliably(self, a, ping_atom::value, my_name);
+              s.done = true;
+            } else {
+              send_reliably(self, s.next, share_atom::value, self, my_name);
+              s.tagged = true;
+            }
           }
+          return ack_atom::value;
         },
-        [=](share_atom, actor an_actor, const std::string& name) {
-          auto& s = self->state;
-          if (an_actor == self) {
-            std::cout << "[r] actor returned" << std::endl;
-            self->send(s.next, tag_atom::value);
-          } else {
-            s.others.push_back(an_actor);
-            std::cout << "[s] " << name << std::endl;
-            self->send(s.next, share_atom::value, an_actor, name);
+        [=](share_atom, actor an_actor, const std::string& name, uint32_t num) {
+          if (!is_duplicate(self, num)) {
+            auto& s = self->state;
+            if (an_actor == self) {
+              std::cout << "[r] actor returned" << std::endl;
+              send_reliably(self, s.next, tag_atom::value);
+            } else {
+              s.others.push_back(an_actor);
+              std::cout << "[s] " << name << std::endl;
+              send_reliably(self, s.next, share_atom::value, an_actor, name);
+            }
           }
+          return ack_atom::value;
         },
-        [=](ping_atom, const std::string& name) {
-          std::cout << "[i] " << name << std::endl;
-          return caf::make_message(pong_atom::value, my_name);
+        [=](ping_atom, const std::string& name, uint32_t num) {
+          if (!is_duplicate(self, num)) {
+            std::cout << "[i] " << name << std::endl;
+            send_reliably(self, actor_cast<actor>(self->current_sender()), pong_atom::value, my_name);
+            //return caf::make_message(pong_atom::value, my_name);
+          }
+          return ack_atom::value;
         },
-        [=](pong_atom, const std::string& name) {
-          std::cout << "[o] " << name << std::endl;
-          auto& s = self->state;
-          s.received_pongs += 1;
-          if (s.received_pongs >= other_nodes)
-            self->send(s.next, tag_atom::value);
+        [=](pong_atom, const std::string& name, uint32_t num) {
+          if (!is_duplicate(self, num)) {
+            std::cout << "[o] " << name << std::endl;
+            auto& s = self->state;
+            s.received_pongs += 1;
+            if (s.received_pongs >= other_nodes)
+              send_reliably(self, s.next, tag_atom::value);
+          }
+          return ack_atom::value;
         },
-        [=](done_atom, const std::string& name) {
-          std::cout << "[d] " << name << std::endl;
-          auto&s = self->state;
-          s.received_done = true;
-          if (leader)
-            self->send(s.next, shutdown_atom::value, name);
-          else
-            self->send(s.next, done_atom::value, name);
+        [=](done_atom, const std::string& name, uint32_t num) {
+          if (!is_duplicate(self, num)) {
+            std::cout << "[d] " << name << std::endl;
+            auto&s = self->state;
+            s.received_done = true;
+            if (leader)
+              send_reliably(self, s.next, shutdown_atom::value, name);
+            else
+              send_reliably(self, s.next, done_atom::value, name);
+          }
+          return ack_atom::value;
         },
-        [=](shutdown_atom, const std::string& name) {
-          std::cout << "shutdown!" << std::endl;
-          if (!leader)
-            self->send(self->state.next, shutdown_atom::value, name);
-          self->quit();
+        [=](shutdown_atom, const std::string& name, uint32_t num) {
+          if (!is_duplicate(self, num)) {
+            std::cout << "shutdown!" << std::endl;
+            if (!leader)
+              send_reliably(self, self->state.next, shutdown_atom::value, name);
+            self->quit();
+          }
+          return ack_atom::value;
         }
       );
     }
