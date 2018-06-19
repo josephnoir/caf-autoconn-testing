@@ -31,6 +31,7 @@ public:
   uint16_t offset = 0;
   uint32_t others = 7;
   uint32_t timeout = 0;
+  int retransmits = 3;
   bool leader = false;
   configuration() {
     load<io::middleman>();
@@ -42,6 +43,7 @@ public:
       .add(leader,     "leader,L",     "make this node the leader")
       .add(timeout,    "timeout,t",    "use a timeout (sec) instead of user input")
       .add(name,       "name,n",       "name used for debugging")
+      .add(retransmits,"retransmits,r","maxmimum number of retransmits")
       .add(others,     "others,o",     "set number of other nodes");
   }
 };
@@ -59,7 +61,7 @@ struct cache {
 
 template <class ... Ts>
 void send_reliably(stateful_actor<cache>* self, const actor dest,
-                   Ts ... xs) {
+                   int max_retransmits, Ts ... xs) {
   auto sequence_number = self->state.sending[dest]++;
   auto msg = make_message(std::forward<Ts>(xs)..., sequence_number);
   self->request(dest, std::chrono::milliseconds(200), msg).then(
@@ -68,20 +70,25 @@ void send_reliably(stateful_actor<cache>* self, const actor dest,
     },
     [=](const error&) {
       std::cerr << "retransmitting" << std::endl;
-      send_reliably(self, dest, msg);
+      send_reliably(self, dest, 1, max_retransmits, msg);
     }
   );
 }
 
 void send_reliably(stateful_actor<cache>* self, const actor dest,
+                   int retransmit_count, int max_retransmits,
                    const caf::message& msg) {
+  if (retransmit_count >= max_retransmits) {
+    std::cerr << "ERROR: reached max retransmits!" << std::endl;
+    return;
+  }
   self->request(dest, std::chrono::milliseconds(200), msg).then(
     [=](ack_atom) {
       // nop
     },
     [=](const error&) {
       std::cerr << "retransmitting" << std::endl;
-      send_reliably(self, dest, msg);
+      send_reliably(self, dest, retransmit_count + 1, max_retransmits, msg);
     }
   );
 }
@@ -95,7 +102,8 @@ bool is_duplicate(stateful_actor<cache>* self, uint32_t num) {
   return res;
 }
 
-behavior ping_test(stateful_actor<cache>* self, uint32_t other_nodes, bool leader, const std::string& my_name) {
+behavior ping_test(stateful_actor<cache>* self, uint32_t other_nodes, bool leader, const std::string& my_name,
+                   int max_retransmits) {
   self->state.received_pongs = 0;
   self->state.tagged = false;
   self->state.done = false;
@@ -105,7 +113,7 @@ behavior ping_test(stateful_actor<cache>* self, uint32_t other_nodes, bool leade
       std::cout << "[n] " << next.node().process_id() << std::endl;
       self->state.next = next;
       if (leader)
-        send_reliably(self, self, tag_atom::value);
+        send_reliably(self, self, max_retransmits, tag_atom::value);
       self->set_default_handler(print_and_drop);
       self->become(
         [=](tag_atom, uint32_t num) {
@@ -113,13 +121,13 @@ behavior ping_test(stateful_actor<cache>* self, uint32_t other_nodes, bool leade
             std::cout << "[t] I'm it! " << std::endl;
             auto& s = self->state;
             if (s.done) {
-              send_reliably(self, s.next, done_atom::value, my_name);
+              send_reliably(self, s.next, max_retransmits, done_atom::value, my_name);
             } else if (s.tagged) {
               for (auto a : s.others)
-                send_reliably(self, a, ping_atom::value, my_name);
+                send_reliably(self, a, max_retransmits, ping_atom::value, my_name);
               s.done = true;
             } else {
-              send_reliably(self, s.next, share_atom::value, self, my_name);
+              send_reliably(self, s.next, max_retransmits, share_atom::value, self, my_name);
               s.tagged = true;
             }
           }
@@ -130,11 +138,11 @@ behavior ping_test(stateful_actor<cache>* self, uint32_t other_nodes, bool leade
             auto& s = self->state;
             if (an_actor == self) {
               std::cout << "[r] actor returned" << std::endl;
-              send_reliably(self, s.next, tag_atom::value);
+              send_reliably(self, s.next, max_retransmits, tag_atom::value);
             } else {
               s.others.push_back(an_actor);
               std::cout << "[s] " << name << std::endl;
-              send_reliably(self, s.next, share_atom::value, an_actor, name);
+              send_reliably(self, s.next, max_retransmits, share_atom::value, an_actor, name);
             }
           }
           return ack_atom::value;
@@ -142,7 +150,7 @@ behavior ping_test(stateful_actor<cache>* self, uint32_t other_nodes, bool leade
         [=](ping_atom, const std::string& name, uint32_t num) {
           if (!is_duplicate(self, num)) {
             std::cout << "[i] " << name << std::endl;
-            send_reliably(self, actor_cast<actor>(self->current_sender()), pong_atom::value, my_name);
+            send_reliably(self, actor_cast<actor>(self->current_sender()), max_retransmits, pong_atom::value, my_name);
             //return caf::make_message(pong_atom::value, my_name);
           }
           return ack_atom::value;
@@ -153,7 +161,7 @@ behavior ping_test(stateful_actor<cache>* self, uint32_t other_nodes, bool leade
             auto& s = self->state;
             s.received_pongs += 1;
             if (s.received_pongs >= other_nodes)
-              send_reliably(self, s.next, tag_atom::value);
+              send_reliably(self, s.next, max_retransmits, tag_atom::value);
           }
           return ack_atom::value;
         },
@@ -163,9 +171,9 @@ behavior ping_test(stateful_actor<cache>* self, uint32_t other_nodes, bool leade
             auto&s = self->state;
             s.received_done = true;
             if (leader)
-              send_reliably(self, s.next, shutdown_atom::value, name);
+              send_reliably(self, s.next, max_retransmits, shutdown_atom::value, name);
             else
-              send_reliably(self, s.next, done_atom::value, name);
+              send_reliably(self, s.next, max_retransmits, done_atom::value, name);
           }
           return ack_atom::value;
         },
@@ -173,7 +181,7 @@ behavior ping_test(stateful_actor<cache>* self, uint32_t other_nodes, bool leade
           if (!is_duplicate(self, num)) {
             std::cout << "shutdown!" << std::endl;
             if (!leader)
-              send_reliably(self, self->state.next, shutdown_atom::value, name);
+              send_reliably(self, self->state.next, max_retransmits, shutdown_atom::value, name);
             self->quit();
           }
           return ack_atom::value;
@@ -223,6 +231,7 @@ void caf_main(actor_system& system, const configuration& config) {
             << " > udp = " << std::boolalpha << config.middleman_enable_udp << std::endl
             << " > tcp = " << std::boolalpha << config.middleman_enable_tcp << std::endl
             << " > timeout = " << config.timeout << std::endl
+            << " > retransmit_count = " << config.retransmits << std::endl
             << " > name = " << config.name << std::endl;
   net_stuff ns(system, config);
   auto remote_port = config.port + config.offset;
@@ -232,7 +241,7 @@ void caf_main(actor_system& system, const configuration& config) {
     local_port = remote_port;
   std::cout << "Node name = " << name << ", id = " << system.node().process_id() << std::endl;
   scoped_actor self{system};
-  auto pt = system.spawn(ping_test, config.others, config.leader, name);
+  auto pt = system.spawn(ping_test, config.others, config.leader, name, config.retransmits);
 
   std::cout << std::endl << "Opening local port ... " << std::endl;
   auto port = ns.publish(pt, local_port, nullptr, true);
