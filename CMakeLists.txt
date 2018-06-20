@@ -96,3 +96,13 @@ target_link_libraries(pong
   ${CAF_LIBRARY_CORE}
   ${CAF_LIBRARY_IO}
 )
+
+add_executable(simple
+  src/simple.cpp
+  ${HEADERS}
+)
+target_link_libraries(simple
+  ${CMAKE_DL_LIBS}
+  ${CAF_LIBRARY_CORE}
+  ${CAF_LIBRARY_IO}
+)
