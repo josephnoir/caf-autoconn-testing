@@ -49,11 +49,10 @@ public:
 };
 
 struct cache {
+  actor leader;
   actor next;
   uint32_t received_pongs;
   bool received_done;
-  bool tagged;
-  bool done;
   std::unordered_map<actor, uint32_t> sending;
   std::unordered_map<strong_actor_ptr, std::set<uint32_t>> receiving;
 };
@@ -66,8 +65,7 @@ void send_reliably(stateful_actor<cache>* self, const actor dest,
   self->request(dest, std::chrono::milliseconds(200), msg).then(
     [=](ack_atom) { /* nop */ },
     [=](const error&) {
-      std::cerr << "retransmitting" << std::endl;
-      send_reliably(self, dest, 1, max_retransmits, msg);
+      send_reliably(self, dest, 0, max_retransmits, msg);
     }
   );
 }
@@ -79,10 +77,10 @@ void send_reliably(stateful_actor<cache>* self, const actor dest,
     std::cerr << "ERROR: reached max retransmits!" << std::endl;
     return;
   }
-  self->request(dest, std::chrono::milliseconds(200), msg).then(
+  std::cerr << "retransmitting: " << to_string(msg) << std::endl;
+  self->request(dest, std::chrono::milliseconds(500), msg).then(
     [=](ack_atom) { /* nop */ },
     [=](const error&) {
-      std::cerr << "retransmitting" << std::endl;
       send_reliably(self, dest, retransmit_count + 1, max_retransmits, msg);
     }
   );
@@ -101,8 +99,6 @@ behavior ping_test(stateful_actor<cache>* self, uint32_t other_nodes,
                    bool leader, const std::string& my_name,
                    int max_retransmits) {
   self->state.received_pongs = 0;
-  self->state.tagged = false;
-  self->state.done = false;
   self->set_default_handler(skip);
   return {
     [=](actor next) {
@@ -113,16 +109,19 @@ behavior ping_test(stateful_actor<cache>* self, uint32_t other_nodes,
                       self, my_name);
       self->set_default_handler(print_and_drop);
       self->become(
-        [=](share_atom, actor an_actor, const std::string& name, uint32_t num) {
+        [=](share_atom, actor leader, const std::string& name, uint32_t num) {
           if (!is_duplicate(self, num)) {
+            // TODO: Save leader actor and only forward it on received ping
+            //       from leader!!!
             auto& s = self->state;
-            if (an_actor == self) {
+            if (leader == self) {
               std::cout << "[r] actor returned" << std::endl;
             } else {
               std::cout << "[s] " << name << std::endl;
-              send_reliably(self, s.next, max_retransmits, share_atom::value,
-                            an_actor, name);
-              send_reliably(self, an_actor, max_retransmits, peer_atom::value,
+              s.leader = leader;
+              //send_reliably(self, s.next, max_retransmits, share_atom::value,
+                            //an_actor, name);
+              send_reliably(self, leader, max_retransmits, peer_atom::value,
                             self, my_name);
             }
           }
@@ -141,6 +140,8 @@ behavior ping_test(stateful_actor<cache>* self, uint32_t other_nodes,
             std::cout << "[i] " << name << std::endl;
             send_reliably(self, sender, max_retransmits, pong_atom::value,
                           my_name);
+            send_reliably(self, self->state.next, max_retransmits,
+                          share_atom::value, self->state.leader, name);
           }
           return ack_atom::value;
         },
