@@ -63,33 +63,28 @@ struct cache {
 
 template <class ... Ts>
 void send_reliably(stateful_actor<cache>* self, const actor dest,
-                   int max_retransmits, Ts ... xs) {
+                   const int max_retransmits, Ts ... xs) {
   auto sequence_number = self->state.sending[dest]++;
   auto msg = make_message(std::forward<Ts>(xs)..., sequence_number);
   self->request(dest, std::chrono::milliseconds(200), msg).then(
-    [=](ack_atom) {
-      // nop
-    },
+    [=](ack_atom) { /* nop */ },
     [=](const error&) {
-      std::cerr << "retransmitting" << std::endl;
-      send_reliably(self, dest, 1, max_retransmits, msg);
+      send_reliably(self, dest, 0, max_retransmits, msg);
     }
   );
 }
 
 void send_reliably(stateful_actor<cache>* self, const actor dest,
-                   int retransmit_count, int max_retransmits,
+                   int retransmit_count, const int max_retransmits,
                    const caf::message& msg) {
   if (retransmit_count >= max_retransmits) {
     std::cerr << "ERROR: reached max retransmits!" << std::endl;
     return;
   }
-  self->request(dest, std::chrono::milliseconds(200), msg).then(
-    [=](ack_atom) {
-      // nop
-    },
+  std::cerr << "retransmitting: " << to_string(msg) << std::endl;
+  self->request(dest, std::chrono::milliseconds(500), msg).then(
+    [=](ack_atom) { /* nop */ },
     [=](const error&) {
-      std::cerr << "retransmitting" << std::endl;
       send_reliably(self, dest, retransmit_count + 1, max_retransmits, msg);
     }
   );
