@@ -151,7 +151,6 @@ behavior ping_test(stateful_actor<cache>* self, uint32_t other_nodes, bool leade
           if (!is_duplicate(self, num)) {
             std::cout << "[i] " << name << std::endl;
             send_reliably(self, actor_cast<actor>(self->current_sender()), max_retransmits, pong_atom::value, my_name);
-            //return caf::make_message(pong_atom::value, my_name);
           }
           return ack_atom::value;
         },

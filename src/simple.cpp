@@ -176,7 +176,6 @@ behavior ping_test(stateful_actor<cache>* self, uint32_t other_nodes,
               send_reliably(self, self->state.next, max_retransmits,
                             shutdown_atom::value, name);
             self->quit();
-            self->system().clock().cancel_all();
           }
           return ack_atom::value;
         }
