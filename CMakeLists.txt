@@ -106,3 +106,13 @@ target_link_libraries(simple
   ${CAF_LIBRARY_CORE}
   ${CAF_LIBRARY_IO}
 )
+
+add_executable(count
+  src/count.cpp
+  ${HEADERS}
+)
+target_link_libraries(count
+  ${CMAKE_DL_LIBS}
+  ${CAF_LIBRARY_CORE}
+  ${CAF_LIBRARY_IO}
+)
